@@ -1,3 +1,5 @@
+import os
+
 from datetime import datetime, timedelta
 
 from django.contrib.auth.models import User
@@ -431,6 +433,136 @@ def login_user(request):
             "user": get_user_data(user),
         },
         status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def bootstrap_admin(request):
+    if User.objects.filter(
+        is_superuser=True
+    ).exists():
+        return Response(
+            {
+                "detail": (
+                    "Bootstrap is disabled because "
+                    "an administrator already exists."
+                )
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    bootstrap_key = request.headers.get(
+        "X-Bootstrap-Key"
+    )
+
+    expected_key = os.getenv(
+        "BOOTSTRAP_ADMIN_KEY",
+        ""
+    )
+
+    if (
+        not expected_key
+        or bootstrap_key != expected_key
+    ):
+        return Response(
+            {
+                "detail": "Invalid bootstrap key."
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    username = str(
+        request.data.get(
+            "username",
+            "",
+        )
+    ).strip()
+
+    email = str(
+        request.data.get(
+            "email",
+            "",
+        )
+    ).strip().lower()
+
+    password = str(
+        request.data.get(
+            "password",
+            "",
+        )
+    )
+
+    if (
+        not username
+        or not email
+        or not password
+    ):
+        return Response(
+            {
+                "detail": (
+                    "username, email and password "
+                    "are required."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if len(password) < 8:
+        return Response(
+            {
+                "detail": (
+                    "Password must be at least "
+                    "8 characters long."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if User.objects.filter(
+        username__iexact=username
+    ).exists():
+        return Response(
+            {
+                "detail": "Username already exists."
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if User.objects.filter(
+        email__iexact=email
+    ).exists():
+        return Response(
+            {
+                "detail": "Email already exists."
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user = User.objects.create_superuser(
+        username=username,
+        email=email,
+        password=password,
+    )
+
+    UserProfile.objects.get_or_create(
+        user=user
+    )
+
+    token, _ = Token.objects.get_or_create(
+        user=user
+    )
+
+    return Response(
+        {
+            "detail": (
+                "Production administrator "
+                "created successfully."
+            ),
+            "username": user.username,
+            "token": token.key,
+        },
+        status=status.HTTP_201_CREATED,
     )
 
 
@@ -3875,9 +4007,9 @@ class ConversationViewSet(viewsets.ModelViewSet):
         ).exclude(
             id=request.user.id
         ).filter(
-            Q(username__icontains=search) |
-            Q(first_name__icontains=search) |
-            Q(last_name__icontains=search)
+            Q(username__icontains=search)
+            | Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
         ).order_by(
             "first_name",
             "last_name",
