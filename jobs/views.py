@@ -2,6 +2,8 @@ import os
 
 from datetime import datetime, timedelta
 
+from django.core.mail import send_mail
+
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from django.contrib.auth.tokens import default_token_generator
@@ -127,11 +129,7 @@ def log_admin_activity(
 
 
 def get_user_data(user):
-    profile = getattr(
-        user,
-        "profile",
-        None,
-    )
+    profile = getattr(user, "profile", None)
 
     companies = Company.objects.filter(
         owner=user
@@ -139,11 +137,11 @@ def get_user_data(user):
 
     active_companies = companies.filter(
         is_active=True,
-        is_suspended=False,
+        is_suspended=False
     )
 
     suspended_companies = companies.filter(
-        is_suspended=True,
+        is_suspended=True
     )
 
     return {
@@ -153,10 +151,32 @@ def get_user_data(user):
         "email": user.email,
         "is_staff": user.is_staff,
         "is_active": user.is_active,
-        "is_employer": companies.exists(),
+
+        "role": getattr(
+            profile,
+            "role",
+            "job_seeker"
+        ),
+
+        "is_employer": (
+            getattr(
+                profile,
+                "role",
+                "job_seeker"
+            ) == "employer"
+            or companies.exists()
+        ),
+
         "company_count": companies.count(),
-        "has_suspended_company": suspended_companies.exists(),
-        "has_active_company": active_companies.exists(),
+
+        "has_suspended_company": (
+            suspended_companies.exists()
+        ),
+
+        "has_active_company": (
+            active_companies.exists()
+        ),
+
         "profile_photo": (
             profile.profile_photo.url
             if profile
@@ -263,30 +283,37 @@ def register_user(request):
     username = str(
         request.data.get(
             "username",
-            "",
+            ""
         )
     ).strip()
 
     email = str(
         request.data.get(
             "email",
-            "",
+            ""
         )
     ).strip().lower()
 
     password = str(
         request.data.get(
             "password",
-            "",
+            ""
         )
     )
 
     first_name = str(
         request.data.get(
             "first_name",
-            "",
+            ""
         )
     ).strip()
+
+    role = str(
+        request.data.get(
+            "role",
+            "job_seeker"
+        )
+    ).strip().lower()
 
     if not username:
         return Response(
@@ -315,9 +342,18 @@ def register_user(request):
     if len(password) < 8:
         return Response(
             {
-                "detail": (
-                    "Password must be at least 8 characters long."
-                )
+                "detail": "Password must be at least 8 characters long."
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if role not in [
+        "job_seeker",
+        "employer"
+    ]:
+        return Response(
+            {
+                "detail": "Invalid account type."
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
@@ -349,8 +385,9 @@ def register_user(request):
         first_name=first_name,
     )
 
-    UserProfile.objects.get_or_create(
-        user=user
+    UserProfile.objects.create(
+        user=user,
+        role=role,
     )
 
     token, _ = Token.objects.get_or_create(
@@ -364,7 +401,6 @@ def register_user(request):
         },
         status=status.HTTP_201_CREATED,
     )
-
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -3449,7 +3485,6 @@ class AdminApplicationsView(APIView):
             serializer.data
         )
 
-
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def password_reset_request(request):
@@ -3491,16 +3526,39 @@ def password_reset_request(request):
         user
     )
 
+    reset_url = (
+        "https://job-board-frontend-dusky-ten.vercel.app"
+        f"/reset-password/{uid}/{token}"
+    )
+
+    send_mail(
+        subject="Ezitech Technologies - Password Reset",
+        message=(
+            "Hello,"
+            "We received a request to reset your password "
+            "for your Ezitech Technologies Job Board account."
+            "Click the link below to reset your password:"
+            f"{reset_url}"
+            "This password reset link will expire if it is no "
+            "longer valid."
+            "If you did not request a password reset, you can "
+            "ignore this email."
+            "Regards,"
+            "Ezitech Technologies Job Board"
+        ),
+        from_email=None,
+        recipient_list=[user.email],
+        fail_silently=False,
+    )
+
     return Response(
         {
             "detail": (
-                "Password reset token generated successfully."
-            ),
-            "uid": uid,
-            "token": token,
-        }
+                "Password reset link sent successfully."
+            )
+        },
+        status=status.HTTP_200_OK,
     )
-
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
