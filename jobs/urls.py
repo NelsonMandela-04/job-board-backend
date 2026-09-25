@@ -19,6 +19,7 @@ from .views import (
     AdminDashboardView,
     AdminUsersView,
     AdminCompaniesView,
+    DatabaseDiagnosticView,
     AdminApplicationsView,
     password_reset_request,
     password_reset_confirm,
@@ -50,4 +51,9 @@ urlpatterns = [
     path("admin/companies/<int:company_id>/", AdminCompaniesView.as_view(), name="admin-company-detail"),
     path("admin/applications/", AdminApplicationsView.as_view(), name="admin-applications"),
     path("public-profile/<str:username>/", PublicProfileView.as_view(), name="public-profile"),
+    path(
+    "admin/database-diagnostic/",
+    DatabaseDiagnosticView.as_view(),
+    name="database-diagnostic",
+),
 ]

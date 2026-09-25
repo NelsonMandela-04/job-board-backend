@@ -3485,6 +3485,25 @@ class AdminApplicationsView(APIView):
             serializer.data
         )
 
+
+
+class DatabaseDiagnosticView(APIView):
+    permission_classes = [
+        IsAdminUser
+    ]
+
+    def get(self, request):
+        return Response(
+            {
+                "users": User.objects.count(),
+                "companies": Company.objects.count(),
+                "jobs": Job.objects.count(),
+                "applications": Application.objects.count(),
+                "profiles": UserProfile.objects.count(),
+            }
+        )
+
+    
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def password_reset_request(request):
