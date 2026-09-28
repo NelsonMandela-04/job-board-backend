@@ -1,8 +1,12 @@
 import os
+import json
+import tempfile
 
 from datetime import datetime, timedelta
 
 from django.core.mail import send_mail
+from django.core.management import call_command
+from django.core.management.color import no_style
 
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
@@ -3485,7 +3489,266 @@ class AdminApplicationsView(APIView):
             serializer.data
         )
 
+class TemporaryDatabaseImportView(APIView):
+    permission_classes = [
+        IsAdminUser
+    ]
 
+    MAX_UPLOAD_SIZE = 10 * 1024 * 1024
+
+    ALLOWED_MODELS = {
+        "auth.user",
+        "jobs.userprofile",
+        "jobs.company",
+        "jobs.job",
+        "jobs.resume",
+        "jobs.application",
+        "jobs.savedjob",
+        "jobs.interview",
+        "jobs.conversation",
+        "jobs.message",
+        "jobs.notification",
+    }
+
+    def post(self, request):
+        configured_secret = os.getenv(
+            "DATA_IMPORT_SECRET",
+            "",
+        )
+
+        if not configured_secret:
+            return Response(
+                {
+                    "detail": (
+                        "Database import is not configured."
+                    )
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        supplied_secret = request.headers.get(
+            "X-Database-Import-Secret",
+            "",
+        )
+
+        if (
+            not supplied_secret
+            or supplied_secret != configured_secret
+        ):
+            return Response(
+                {
+                    "detail": "Invalid import secret."
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        confirmation = request.headers.get(
+            "X-Database-Import-Confirm",
+            "",
+        )
+
+        if confirmation != "REPLACE_PRODUCTION_DATABASE":
+            return Response(
+                {
+                    "detail": (
+                        "Import confirmation header required."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        uploaded_file = request.FILES.get(
+            "fixture"
+        )
+
+        if not uploaded_file:
+            return Response(
+                {
+                    "detail": (
+                        "Upload the Django fixture "
+                        "using the 'fixture' field."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if uploaded_file.size > self.MAX_UPLOAD_SIZE:
+            return Response(
+                {
+                    "detail": (
+                        "Fixture is too large. "
+                        "Maximum size is 10 MB."
+                    )
+                },
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+
+        temp_path = None
+        filtered_path = None
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                suffix=".json",
+                delete=False,
+            ) as temp_file:
+                for chunk in uploaded_file.chunks():
+                    temp_file.write(chunk)
+
+                temp_path = temp_file.name
+
+            with open(
+                temp_path,
+                "r",
+                encoding="utf-8",
+            ) as file:
+                fixture_data = json.load(file)
+
+            if not isinstance(
+                fixture_data,
+                list,
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "Invalid Django fixture format."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            filtered_fixture = []
+            ignored_models = {}
+
+            for item in fixture_data:
+                model_name = item.get(
+                    "model"
+                )
+
+                if model_name in self.ALLOWED_MODELS:
+                    filtered_fixture.append(
+                        item
+                    )
+                else:
+                    ignored_models[
+                        model_name
+                    ] = (
+                        ignored_models.get(
+                            model_name,
+                            0,
+                        )
+                        + 1
+                    )
+
+            if not filtered_fixture:
+                return Response(
+                    {
+                        "detail": (
+                            "No importable application "
+                            "data was found."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".json",
+                delete=False,
+                encoding="utf-8",
+            ) as filtered_file:
+                json.dump(
+                    filtered_fixture,
+                    filtered_file,
+                    indent=2,
+                )
+
+                filtered_path = (
+                    filtered_file.name
+                )
+
+            with transaction.atomic():
+                Token.objects.all().delete()
+
+                Message.objects.all().delete()
+                Notification.objects.all().delete()
+                Interview.objects.all().delete()
+                Application.objects.all().delete()
+                SavedJob.objects.all().delete()
+                Resume.objects.all().delete()
+                Job.objects.all().delete()
+                Company.objects.all().delete()
+                Conversation.objects.all().delete()
+                UserProfile.objects.all().delete()
+                User.objects.all().delete()
+
+                call_command(
+                    "loaddata",
+                    filtered_path,
+                    verbosity=0,
+                )
+
+                from django.db import connection
+
+                sequence_sql = (
+                    connection.ops.sequence_reset_sql(
+                        no_style(),
+                        [
+                            User,
+                            UserProfile,
+                            Company,
+                            Job,
+                            Resume,
+                            Application,
+                            Interview,
+                            SavedJob,
+                            Notification,
+                            Conversation,
+                            Message,
+                        ],
+                    )
+                )
+
+                with connection.cursor() as cursor:
+                    for sql in sequence_sql:
+                        cursor.execute(sql)
+
+            return Response(
+                {
+                    "success": True,
+                    "message": (
+                        "Database import completed successfully."
+                    ),
+                    "imported_records": len(
+                        filtered_fixture
+                    ),
+                    "ignored_models": ignored_models,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as exc:
+            return Response(
+                {
+                    "success": False,
+                    "detail": (
+                        "Database import failed."
+                    ),
+                    "error": str(exc),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        finally:
+            for path in [
+                temp_path,
+                filtered_path,
+            ]:
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
 
 class DatabaseDiagnosticView(APIView):
     permission_classes = [
