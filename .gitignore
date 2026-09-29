@@ -31,3 +31,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Loaddata backup
+local_database_backup.json
+local_database_backup_utf8.json
+
+upload_logos.py
