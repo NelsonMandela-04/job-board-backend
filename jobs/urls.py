@@ -20,7 +20,6 @@ from .views import (
     AdminUsersView,
     AdminCompaniesView,
     DatabaseDiagnosticView,
-    TemporaryDatabaseImportView,
     AdminApplicationsView,
     password_reset_request,
     password_reset_confirm,
@@ -56,10 +55,5 @@ urlpatterns = [
     "admin/database-diagnostic/",
     DatabaseDiagnosticView.as_view(),
     name="database-diagnostic",
-),
-path(
-    "admin/temporary-database-import/",
-    TemporaryDatabaseImportView.as_view(),
-    name="temporary-database-import",
 ),
 ]
